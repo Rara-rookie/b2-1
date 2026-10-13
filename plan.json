@@ -1,0 +1,287 @@
+{
+  "package": "budget_app",
+  "entry": "budget_app",
+  "decisions": [
+    "저장 포맷은 JSONL로 고정한다(transactions.jsonl, categories.jsonl, budgets.jsonl).",
+    "update는 옵션 기반(안 A)으로 고정한다.",
+    "카테고리 파일이 비어있으면 기본 카테고리(food, transport, rent, etc)를 자동 생성한다(안 A).",
+    "카테고리 삭제 시 사용 중이면 삭제를 막는다.",
+    "기본 저장 폴더는 ./data 이며 --data-dir 옵션으로 변경 가능하다.",
+    "id 포맷은 TX-000001 처럼 6자리 제로패딩 시퀀스로 발급한다.",
+    "update/delete는 임시 파일 작성 후 os.replace로 원자적 교체한다.",
+    "패키지 내부 import는 전부 상대 import(from .models import X)로 한다."
+  ],
+  "modules": [
+    {
+      "path": "errors.py",
+      "purpose": "애플리케이션 공통 예외 계층을 정의한다.",
+      "covers": [
+        "13"
+      ],
+      "imports_from": [],
+      "api": [
+        "class AppError(Exception): def __init__(self, message: str, hint: str | None = None) -> None",
+        "class ValidationError(AppError): def __init__(self, message: str, hint: str | None = None) -> None",
+        "class NotFoundError(AppError): def __init__(self, message: str, hint: str | None = None) -> None",
+        "class ConflictError(AppError): def __init__(self, message: str, hint: str | None = None) -> None",
+        "class StorageError(AppError): def __init__(self, message: str, hint: str | None = None) -> None"
+      ]
+    },
+    {
+      "path": "models.py",
+      "purpose": "거래/예산/카테고리 데이터 구조와 검증·직렬화를 정의한다.",
+      "covers": [
+        "2"
+      ],
+      "imports_from": [
+        "errors.py"
+      ],
+      "api": [
+        "from dataclasses import dataclass",
+        "@dataclass class Transaction: id: str; type: str; date: str; amount: int; category: str; memo: str = ''; tags: list[str] = None",
+        "def to_dict(tx: Transaction) -> dict[str, object]",
+        "def from_dict(data: dict[str, object]) -> Transaction",
+        "def validate_date(date: str) -> str",
+        "def validate_type(type_: str) -> str",
+        "def validate_amount(amount: object) -> int",
+        "def validate_month(month: str) -> str",
+        "def parse_tags(raw: str) -> list[str]",
+        "@dataclass class Budget: month: str; amount: int",
+        "@dataclass class Category: name: str"
+      ]
+    },
+    {
+      "path": "repository.py",
+      "purpose": "JSONL 파일 3종에 대한 스트리밍 읽기/원자적 쓰기 저장소를 제공한다.",
+      "covers": [
+        "3",
+        "5",
+        "6",
+        "9"
+      ],
+      "imports_from": [
+        "errors.py",
+        "models.py"
+      ],
+      "api": [
+        "from typing import Iterator",
+        "class TransactionRepository: def __init__(self, data_dir: str) -> None",
+        "class TransactionRepository: def ensure_files(self) -> None",
+        "class TransactionRepository: def stream(self) -> Iterator[Transaction]",
+        "class TransactionRepository: def next_id(self) -> str",
+        "class TransactionRepository: def add(self, tx: Transaction) -> None",
+        "class TransactionRepository: def get(self, tx_id: str) -> Transaction",
+        "class TransactionRepository: def update(self, tx_id: str, changes: dict[str, object]) -> Transaction",
+        "class TransactionRepository: def delete(self, tx_id: str) -> None",
+        "class TransactionRepository: def category_in_use(self, name: str) -> bool",
+        "class CategoryStore: def __init__(self, data_dir: str) -> None",
+        "class CategoryStore: def ensure_files(self, defaults: list[str]) -> None",
+        "class CategoryStore: def list(self) -> list[str]",
+        "class CategoryStore: def add(self, name: str) -> None",
+        "class CategoryStore: def remove(self, name: str) -> None",
+        "class CategoryStore: def exists(self, name: str) -> bool",
+        "class BudgetStore: def __init__(self, data_dir: str) -> None",
+        "class BudgetStore: def ensure_files(self) -> None",
+        "class BudgetStore: def set(self, month: str, amount: int) -> None",
+        "class BudgetStore: def get(self, month: str) -> int | None"
+      ]
+    },
+    {
+      "path": "decorators.py",
+      "purpose": "예외 처리·실행 로그·실행 시간 측정 공통 관심사를 데코레이터로 분리한다.",
+      "covers": [
+        "12",
+        "13"
+      ],
+      "imports_from": [
+        "errors.py"
+      ],
+      "api": [
+        "from typing import Callable, TypeVar",
+        "F = TypeVar('F', bound=Callable[..., object])",
+        "def log_call(func: F) -> F",
+        "def timed(func: F) -> F",
+        "def handle_errors(func: Callable[..., int]) -> Callable[..., int]"
+      ]
+    },
+    {
+      "path": "service.py",
+      "purpose": "저장소를 조합해 add/list/search/summary/budget/category/import/export 비즈니스 로직을 수행한다.",
+      "covers": [
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11"
+      ],
+      "imports_from": [
+        "errors.py",
+        "models.py",
+        "repository.py",
+        "decorators.py"
+      ],
+      "api": [
+        "from typing import Iterator",
+        "from dataclasses import dataclass",
+        "@dataclass class SearchQuery: date_from: str | None = None; date_to: str | None = None; category: str | None = None; type: str | None = None; q: str | None = None; tag: str | None = None",
+        "@dataclass class SummaryResult: month: str; total_income: int; total_expense: int; balance: int; top_expenses: list[tuple[str, int]]; budget: int | None; usage_rate: float | None; over_budget: bool",
+        "class BudgetService: def __init__(self, tx_repo, cat_store, budget_store) -> None",
+        "class BudgetService: def add_transaction(self, date: str, type_: str, category: str, amount: int, memo: str, tags: list[str]) -> Transaction",
+        "class BudgetService: def list_transactions(self, limit: int) -> list[Transaction]",
+        "class BudgetService: def search_transactions(self, query: SearchQuery) -> Iterator[Transaction]",
+        "class BudgetService: def summary(self, month: str, top: int) -> SummaryResult",
+        "class BudgetService: def set_budget(self, month: str, amount: int) -> None",
+        "class BudgetService: def category_add(self, name: str) -> None",
+        "class BudgetService: def category_list(self) -> list[str]",
+        "class BudgetService: def category_remove(self, name: str) -> None",
+        "class BudgetService: def update_transaction(self, tx_id: str, changes: dict[str, object]) -> Transaction",
+        "class BudgetService: def delete_transaction(self, tx_id: str) -> None",
+        "class BudgetService: def import_csv(self, path: str) -> tuple[int, int]",
+        "class BudgetService: def export_csv(self, path: str, query: SearchQuery) -> int"
+      ]
+    },
+    {
+      "path": "formatter.py",
+      "purpose": "거래/요약/카테고리를 콘솔 출력용 문자열로 변환한다.",
+      "covers": [
+        "2",
+        "3",
+        "4",
+        "5",
+        "8",
+        "10"
+      ],
+      "imports_from": [
+        "models.py",
+        "service.py"
+      ],
+      "api": [
+        "def format_transaction(tx: Transaction) -> str",
+        "def format_transactions(txs: list[Transaction]) -> str",
+        "def format_summary(result: SummaryResult) -> str",
+        "def format_categories(names: list[str]) -> str"
+      ]
+    },
+    {
+      "path": "cli.py",
+      "purpose": "argparse로 명령을 파싱하고 대화형 입력을 받아 서비스를 호출하며 종료 코드를 결정한다.",
+      "covers": [
+        "1",
+        "4",
+        "6",
+        "13"
+      ],
+      "imports_from": [
+        "errors.py",
+        "models.py",
+        "repository.py",
+        "service.py",
+        "formatter.py",
+        "decorators.py"
+      ],
+      "api": [
+        "import argparse",
+        "def build_parser() -> argparse.ArgumentParser",
+        "def build_service(data_dir: str) -> BudgetService",
+        "def prompt_add(service: BudgetService) -> Transaction",
+        "def main(argv: list[str] | None = None) -> int"
+      ]
+    },
+    {
+      "path": "__main__.py",
+      "purpose": "python -m budget_app 진입점으로 cli.main을 호출하고 종료 코드로 종료한다.",
+      "covers": [
+        "1",
+        "13"
+      ],
+      "imports_from": [
+        "cli.py"
+      ],
+      "api": [
+        "def run() -> None"
+      ]
+    }
+  ],
+  "smoke": [
+    {
+      "args": "--data-dir ./data category list",
+      "expect": "ok",
+      "contains": "food",
+      "why": "카테고리 파일이 비어있을 때 기본 카테고리(food/transport/rent/etc) 자동 생성이 동작하는지 확인"
+    },
+    {
+      "args": "--data-dir ./data import --from import.csv",
+      "expect": "ok",
+      "contains": "imported=5",
+      "why": "CSV 5건 가져오기가 실제로 5건 처리되는지 확인. 이후 시험들의 데이터 원천"
+    },
+    {
+      "args": "--data-dir ./data list --limit 3",
+      "expect": "ok",
+      "contains": "2024-03-30",
+      "why": "최신순 정렬이 맞으면 가장 늦은 날짜 2024-03-30이 첫 줄에 나온다. 정렬이 틀리면 limit 3 안에 안 들어올 수 있음"
+    },
+    {
+      "args": "--data-dir ./data summary --month 2024-03 --top 3",
+      "expect": "ok",
+      "contains": "215000",
+      "why": "2024-03 지출 합계 = rent150000+food45000+transport20000 = 215000. 계산이 틀리면 안 나옴"
+    },
+    {
+      "args": "--data-dir ./data budget set --month 2024-03 --amount 500000",
+      "expect": "ok",
+      "contains": "500000",
+      "why": "예산 저장이 실제로 반영되는지 확인. 다음 summary 시험의 사전 조건"
+    },
+    {
+      "args": "--data-dir ./data summary --month 2024-03 --top 3",
+      "expect": "ok",
+      "contains": "43.0",
+      "why": "지출215000 / 예산500000 = 43.0% 사용률. 예산 연동 계산이 맞을 때만 나옴"
+    },
+    {
+      "args": "--data-dir ./data search --category food --type expense",
+      "expect": "ok",
+      "contains": "45000",
+      "why": "food expense 검색 결과에 금액 45000이 나오는지로 검색 필터가 실제 동작하는지 확인"
+    },
+    {
+      "args": "--data-dir ./data delete --id TX-999999",
+      "expect": "error",
+      "contains": "없",
+      "why": "존재하지 않는 id 삭제는 오류로 종료하고 없는 데이터 메시지를 출력해야 함"
+    },
+    {
+      "args": "--data-dir ./data category remove food",
+      "expect": "error",
+      "contains": "사용",
+      "why": "import된 거래가 food를 사용 중이므로 삭제가 막혀야 함(사용 중 메시지)"
+    },
+    {
+      "args": "--data-dir ./data summary --month 2024-08 --top 3",
+      "expect": "ok",
+      "contains": "데이터 없음",
+      "why": "거래가 없는 달은 데이터 없음을 명확히 출력해야 함"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "import.csv",
+      "content": "date,type,category,amount,memo,tags\n2024-03-15,expense,food,15000,점심,meal\n2024-03-10,expense,food,30000,장보기,grocery\n2024-03-05,expense,transport,20000,버스,\n2024-03-01,expense,rent,150000,월세,\n2024-03-30,income,etc,3000000,급여,salary\n"
+    }
+  ],
+  "docs": [
+    {
+      "path": "README.md",
+      "sections": [
+        "실행 방법",
+        "저장 파일 위치/형식",
+        "주요 명령 예시",
+        "import/export CSV 스키마"
+      ]
+    }
+  ]
+}

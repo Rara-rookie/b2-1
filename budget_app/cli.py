@@ -1,10 +1,11 @@
 import argparse
 
 from .decorators import handle_errors, log_call, timed
-from .errors import AppError
+from .errors import AppError, ValidationError
 from .formatter import (
     format_categories,
     format_error,
+    format_import_result,
     format_summary,
     format_transaction,
     format_transactions,
@@ -73,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import")
     import_parser.add_argument("--from", dest="from_path", required=True)
+    import_parser.add_argument("--atomic", action="store_true")
+    import_parser.add_argument("--report")
 
     export_parser = subparsers.add_parser("export")
     export_parser.add_argument("--out", required=True)
@@ -108,6 +111,12 @@ def prompt_add(service: BudgetService) -> Transaction:
             return service.add_transaction(date, type_, category, amount, memo, tags)
         except AppError as exc:
             print(format_error(exc))
+        except EOFError:
+            # 파이프·파일로 입력을 넘기다 항목이 모자라면 여기로 온다. 재입력 루프를 끊고 원인을 밝힌다.
+            raise ValidationError(
+                "입력이 중단되었습니다.",
+                "add 는 대화형 입력입니다. 파이프로 넘길 때는 6개 항목(날짜·타입·카테고리·금액·메모·태그)을 모두 주세요.",
+            ) from None
 
 
 @handle_errors
@@ -203,9 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "import":
-        imported, skipped = service.import_csv(args.from_path)
-        print(f"[완료] imported={imported}, skipped={skipped}")
-        return 0
+        result = service.import_csv(args.from_path, atomic=args.atomic, report_path=args.report)
+        print(format_import_result(result))
+        return 1 if result.rolled_back else 0
 
     if args.command == "export":
         if not args.month and not (args.date_from and args.date_to):

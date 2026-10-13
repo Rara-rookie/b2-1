@@ -4,7 +4,7 @@ import csv
 from dataclasses import dataclass
 from typing import Iterator, cast
 
-from .errors import ConflictError, ErrorCollector, ValidationError
+from .errors import AppError, ConflictError, ErrorCollector, StorageError, ValidationError
 from .models import Transaction, parse_tags, validate_amount, validate_date, validate_month, validate_type
 
 
@@ -16,6 +16,23 @@ class SearchQuery:
     type: str | None = None
     q: str | None = None
     tag: str | None = None
+
+
+@dataclass
+class ImportFailure:
+    line: int
+    reason: str
+    hint: str | None
+    row: dict[str, str]
+
+
+@dataclass
+class ImportResult:
+    imported: int
+    skipped: int
+    failures: list[ImportFailure]
+    report_path: str | None = None
+    rolled_back: bool = False
 
 
 @dataclass
@@ -206,13 +223,49 @@ class BudgetService:
             )
         self.tx_repo.delete(tx_id.strip())
 
-    def import_csv(self, path: str) -> tuple[int, int]:
-        imported = 0
-        skipped = 0
+    def import_csv(
+        self,
+        path: str,
+        atomic: bool = False,
+        report_path: str | None = None,
+    ) -> ImportResult:
+        """CSV 를 가져온다.
 
+        기본은 부분 성공이다. 검증에 실패한 행만 건너뛰고 나머지를 반영한 뒤, 행 번호와 이유를 돌려준다.
+        atomic=True 면 먼저 전체를 검증해 한 행이라도 실패하면 아무것도 쓰지 않는다(전체 롤백).
+        report_path 를 주면 실패 행을 같은 스키마 + 이유 컬럼으로 저장해 고쳐서 다시 넣을 수 있게 한다.
+        """
+        if atomic:
+            failures = [f for _, f in self._scan_csv(path) if f is not None]
+            if failures:
+                written = self._write_failure_report(report_path, failures)
+                return ImportResult(0, len(failures), failures, written, True)
+
+        imported = 0
+        failures = []
+        for row, failure in self._scan_csv(path):
+            if failure is not None:
+                failures.append(failure)
+                continue
+            self.add_transaction(
+                date=row["date"],
+                type_=row["type"],
+                category=row["category"],
+                amount=row["amount"],
+                memo=row["memo"],
+                tags=row["tags"],
+            )
+            imported += 1
+
+        written = self._write_failure_report(report_path, failures)
+        return ImportResult(imported, len(failures), failures, written, False)
+
+    # 한 행씩 읽어 (행, 실패) 를 돌려준다. 실패가 None 이면 그 행은 검증을 통과했다.
+    # 제너레이터로 두어 파일 전체를 메모리에 올리지 않는다(검증 단계와 적용 단계가 각각 한 번씩 읽는다).
+    def _scan_csv(self, path: str) -> Iterator[tuple[dict[str, str], ImportFailure | None]]:
+        columns = ["date", "type", "category", "amount", "memo", "tags"]
         with open(path, "r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
-            required = ["date", "type", "category", "amount", "memo", "tags"]
             if reader.fieldnames is None:
                 raise ValidationError(
                     "CSV 헤더가 없습니다.",
@@ -225,25 +278,53 @@ class BudgetService:
                         "필수 컬럼: date,type,category,amount",
                     )
 
-            for row in reader:
-                if row is None:
-                    skipped += 1
-                    continue
-                try:
-                    data = {key: row.get(key, "") for key in required}
-                    self.add_transaction(
-                        date=str(data["date"]),
-                        type_=str(data["type"]),
-                        category=str(data["category"]),
-                        amount=data["amount"],
-                        memo=str(data["memo"]),
-                        tags=str(data["tags"]),
+            for raw in reader:
+                line = reader.line_num
+                row = {key: str(raw.get(key) or "") for key in columns}
+                errors = self._row_errors(row)
+                if errors:
+                    yield row, ImportFailure(
+                        line=line,
+                        reason="; ".join(e.message for e in errors),
+                        hint=errors[0].hint,
+                        row=row,
                     )
-                    imported += 1
-                except ValidationError:
-                    skipped += 1
+                else:
+                    yield row, None
 
-        return imported, skipped
+    # 한 행의 모든 항목을 검증해 실패를 모은다(첫 실패에서 멈추지 않는다).
+    def _row_errors(self, row: dict[str, str]) -> list[AppError]:
+        collector = ErrorCollector()
+        collector.collect(validate_date, row["date"])
+        collector.collect(validate_type, row["type"])
+        collector.collect(self._validate_category, row["category"])
+        collector.collect(validate_amount, row["amount"])
+        collector.collect(self._normalize_tags, row["tags"])
+        return collector.errors
+
+    # 실패 행을 원본 스키마 + line/reason 컬럼으로 저장한다. 고친 뒤 그대로 다시 import 할 수 있다.
+    def _write_failure_report(
+        self,
+        report_path: str | None,
+        failures: list[ImportFailure],
+    ) -> str | None:
+        if not report_path or not failures:
+            return None
+        columns = ["date", "type", "category", "amount", "memo", "tags"]
+        try:
+            with open(report_path, "w", encoding="utf-8", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=["line", "reason"] + columns)
+                writer.writeheader()
+                for failure in failures:
+                    record = {"line": failure.line, "reason": failure.reason}
+                    record.update(failure.row)
+                    writer.writerow(record)
+        except OSError as exc:
+            raise StorageError(
+                "실패 행 리포트를 저장할 수 없습니다.",
+                "--report 경로의 폴더와 권한을 확인하세요.",
+            ) from exc
+        return report_path
 
     def export_csv(self, path: str, query: SearchQuery) -> int:
         normalized = self._normalize_query(query)

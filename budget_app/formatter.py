@@ -1,6 +1,6 @@
 from .errors import AppError
 from .models import Transaction
-from .service import SummaryResult
+from .service import ImportResult, SummaryResult
 
 
 def format_error(exc: AppError) -> str:
@@ -55,3 +55,25 @@ def format_categories(names: list[str]) -> str:
     if not names:
         return "데이터 없음"
     return "\n".join(f"- {name}" for name in names)
+
+
+def format_import_result(result: ImportResult, show: int = 10) -> str:
+    lines: list[str] = []
+    if result.rolled_back:
+        lines.append(
+            "[중단] 실패 %d행이 있어 아무것도 적용하지 않았습니다 (--atomic)." % result.skipped
+        )
+    else:
+        lines.append("[완료] imported=%d, skipped=%d" % (result.imported, result.skipped))
+
+    for failure in result.failures[:show]:
+        lines.append("[실패] %d행: %s" % (failure.line, failure.reason))
+    remain = len(result.failures) - show
+    if remain > 0:
+        lines.append("[실패] ... 외 %d행" % remain)
+
+    if result.report_path:
+        lines.append("[리포트] %s (%d행)" % (result.report_path, len(result.failures)))
+    elif result.failures:
+        lines.append("[힌트] --report 경로.csv 로 실패 행만 따로 저장할 수 있습니다.")
+    return "\n".join(lines)

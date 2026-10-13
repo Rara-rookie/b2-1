@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, cast
 
-from .errors import ConflictError, ValidationError
+from .errors import ConflictError, ErrorCollector, ValidationError
 from .models import Transaction, parse_tags, validate_amount, validate_date, validate_month, validate_type
 
 
@@ -45,24 +45,29 @@ class BudgetService:
         date: str,
         type_: str,
         category: str,
-        amount: int,
+        amount: object,
         memo: str,
-        tags: list[str],
+        tags: object,
     ) -> Transaction:
-        validated_date = validate_date(date)
-        validated_type = validate_type(type_)
-        validated_amount = validate_amount(amount)
-        validated_category = self._validate_category(category)
-        normalized_tags = self._normalize_tags(tags)
+        # 항목마다 독립적으로 검증해 실패를 모은다. 날짜가 틀렸다고 끊으면 카테고리·금액 오류를
+        # 사용자가 알 수 없어, 고칠 때마다 다음 오류를 새로 만나게 된다.
+        collector = ErrorCollector()
+        validated_date = collector.collect(validate_date, date)
+        validated_type = collector.collect(validate_type, type_)
+        validated_category = collector.collect(self._validate_category, category)
+        validated_amount = collector.collect(validate_amount, amount)
+        normalized_tags = collector.collect(self._normalize_tags, tags)
+        collector.raise_if_any()
 
+        # 여기까지 왔으면 모든 검증이 성공했으므로 None 이 아니다.
         tx = Transaction(
             id=self.tx_repo.next_id(),
-            type=validated_type,
-            date=validated_date,
-            amount=validated_amount,
-            category=validated_category,
+            type=cast(str, validated_type),
+            date=cast(str, validated_date),
+            amount=cast(int, validated_amount),
+            category=cast(str, validated_category),
             memo=memo if isinstance(memo, str) else str(memo),
-            tags=normalized_tags,
+            tags=cast("list[str]", normalized_tags),
         )
         self.tx_repo.add(tx)
         return tx
@@ -165,23 +170,25 @@ class BudgetService:
             )
 
         normalized: dict[str, object] = {}
+        collector = ErrorCollector()
         for key, value in changes.items():
             if key == "id":
                 continue
             if key == "date":
-                normalized["date"] = validate_date(str(value))
+                normalized["date"] = collector.collect(validate_date, str(value))
             elif key == "type":
-                normalized["type"] = validate_type(str(value))
+                normalized["type"] = collector.collect(validate_type, str(value))
             elif key == "category":
-                normalized["category"] = self._validate_category(str(value))
+                normalized["category"] = collector.collect(self._validate_category, str(value))
             elif key == "amount":
-                normalized["amount"] = validate_amount(value)
+                normalized["amount"] = collector.collect(validate_amount, value)
             elif key == "memo":
                 normalized["memo"] = value if isinstance(value, str) else str(value)
             elif key == "tags":
-                normalized["tags"] = self._normalize_tags(value)
+                normalized["tags"] = collector.collect(self._normalize_tags, value)
             else:
                 continue
+        collector.raise_if_any()
 
         if not normalized:
             raise ValidationError(
@@ -228,9 +235,9 @@ class BudgetService:
                         date=str(data["date"]),
                         type_=str(data["type"]),
                         category=str(data["category"]),
-                        amount=validate_amount(data["amount"]),
+                        amount=data["amount"],
                         memo=str(data["memo"]),
-                        tags=parse_tags(str(data["tags"])),
+                        tags=str(data["tags"]),
                     )
                     imported += 1
                 except ValidationError:

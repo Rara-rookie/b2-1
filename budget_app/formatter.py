@@ -1,5 +1,15 @@
+from .errors import AppError
 from .models import Transaction
 from .service import SummaryResult
+
+
+def format_error(exc: AppError) -> str:
+    lines: list[str] = []
+    for error in exc.unpack():
+        lines.append(f"[오류] {error.message}")
+        if error.hint:
+            lines.append(f"[힌트] {error.hint}")
+    return "\n".join(lines)
 
 
 def format_transaction(tx: Transaction) -> str:

@@ -1,7 +1,14 @@
 import argparse
 
 from .decorators import handle_errors, log_call, timed
-from .formatter import format_categories, format_summary, format_transaction, format_transactions
+from .errors import AppError
+from .formatter import (
+    format_categories,
+    format_error,
+    format_summary,
+    format_transaction,
+    format_transactions,
+)
 from .models import Transaction, parse_tags, validate_amount
 from .repository import BudgetStore, CategoryStore, TransactionRepository
 from .service import BudgetService, SearchQuery
@@ -93,20 +100,14 @@ def prompt_add(service: BudgetService) -> Transaction:
             date = input("날짜(YYYY-MM-DD): ")
             type_ = input("타입(income/expense): ")
             category = input("카테고리: ")
-            amount_raw = input("금액(양수): ")
+            amount = input("금액(양수): ")
             memo = input("메모(선택): ")
-            tags_raw = input("태그(쉼표로 구분, 없으면 엔터): ")
-            amount = validate_amount(amount_raw)
-            tags = parse_tags(tags_raw)
+            tags = input("태그(쉼표로 구분, 없으면 엔터): ")
+            # 입력값을 그대로 넘긴다. 금액·태그를 여기서 먼저 검증하면 그 오류만 따로 나가
+            # 같은 입력의 다른 오류와 함께 보여줄 수 없다.
             return service.add_transaction(date, type_, category, amount, memo, tags)
-        except Exception as exc:
-            from .errors import AppError
-            if isinstance(exc, AppError):
-                print(f"[오류] {exc.message}")
-                if exc.hint:
-                    print(f"[힌트] {exc.hint}")
-                continue
-            raise
+        except AppError as exc:
+            print(format_error(exc))
 
 
 @handle_errors

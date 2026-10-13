@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Callable, TypeVar, cast
 
 from .errors import AppError
+from .formatter import format_error
 
 F = TypeVar("F", bound=Callable[..., object])
 
@@ -38,9 +39,7 @@ def handle_errors(func: Callable[..., int]) -> Callable[..., int]:
         try:
             return func(*args, **kwargs)
         except AppError as exc:
-            print(f"[오류] {exc.message}")
-            if exc.hint:
-                print(f"[힌트] {exc.hint}")
+            print(format_error(exc))
             return 1
         except Exception:
             print("[오류] 알 수 없는 오류가 발생했습니다.")

@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -45,6 +46,63 @@ class TransactionRepository:
                             "거래 저장 파일 형식이 올바르지 않습니다.",
                             "transactions.jsonl 파일 내용을 확인하세요.",
                         ) from exc
+        except OSError as exc:
+            raise StorageError(
+                "거래 저장 파일을 읽을 수 없습니다.",
+                "저장 폴더 권한과 경로를 확인하세요.",
+            ) from exc
+
+    def reverse_stream(self) -> Iterator[Transaction]:
+        self.ensure_files()
+        try:
+            with open(self.path, "rb") as file:
+                file.seek(0, io.SEEK_END)
+                position = file.tell()
+                buffer = b""
+                block_size = 4096
+
+                while position > 0:
+                    read_size = min(block_size, position)
+                    position -= read_size
+                    file.seek(position)
+                    chunk = file.read(read_size)
+                    buffer = chunk + buffer
+                    lines = buffer.split(b"\n")
+                    buffer = lines[0]
+                    for raw_line in reversed(lines[1:]):
+                        text = raw_line.decode("utf-8").strip()
+                        if not text:
+                            continue
+                        try:
+                            data = json.loads(text)
+                            if not isinstance(data, dict):
+                                raise StorageError(
+                                    "거래 저장 파일 형식이 올바르지 않습니다.",
+                                    "transactions.jsonl 파일 내용을 확인하세요.",
+                                )
+                            yield from_dict(data)
+                        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                            raise StorageError(
+                                "거래 저장 파일 형식이 올바르지 않습니다.",
+                                "transactions.jsonl 파일 내용을 확인하세요.",
+                            ) from exc
+
+                if buffer:
+                    text = buffer.decode("utf-8").strip()
+                    if text:
+                        try:
+                            data = json.loads(text)
+                            if not isinstance(data, dict):
+                                raise StorageError(
+                                    "거래 저장 파일 형식이 올바르지 않습니다.",
+                                    "transactions.jsonl 파일 내용을 확인하세요.",
+                                )
+                            yield from_dict(data)
+                        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                            raise StorageError(
+                                "거래 저장 파일 형식이 올바르지 않습니다.",
+                                "transactions.jsonl 파일 내용을 확인하세요.",
+                            ) from exc
         except OSError as exc:
             raise StorageError(
                 "거래 저장 파일을 읽을 수 없습니다.",

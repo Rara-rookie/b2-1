@@ -138,8 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "list":
-        txs = service.list_transactions(args.limit)
-        print(format_transactions(txs))
+        count = 0
+        for tx in service.list_transactions(args.limit):
+            print(format_transaction(tx))
+            count += 1
+        if count == 0:
+            print("데이터 없음")
         return 0
 
     if args.command == "search":
@@ -151,8 +155,12 @@ def main(argv: list[str] | None = None) -> int:
             q=args.q,
             tag=args.tag,
         )
-        txs = list(service.search_transactions(query))
-        print(format_transactions(txs))
+        count = 0
+        for tx in service.search_transactions(query):
+            print(format_transaction(tx))
+            count += 1
+        if count == 0:
+            print("데이터 없음")
         return 0
 
     if args.command == "summary":

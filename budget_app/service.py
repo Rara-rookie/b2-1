@@ -89,25 +89,20 @@ class BudgetService:
         self.tx_repo.add(tx)
         return tx
 
-    def list_transactions(self, limit: int) -> list[Transaction]:
+    def list_transactions(self, limit: int) -> Iterator[Transaction]:
         validated_limit = self._validate_limit(limit)
-        recent: list[Transaction] = []
-        for tx in self.tx_repo.stream():
-            recent.append(tx)
-            recent.sort(key=lambda item: (item.date, item.id), reverse=True)
-            if len(recent) > validated_limit:
-                recent.pop()
-        return recent
+        count = 0
+        for tx in self.tx_repo.reverse_stream():
+            yield tx
+            count += 1
+            if count >= validated_limit:
+                break
 
     def search_transactions(self, query: SearchQuery) -> Iterator[Transaction]:
         normalized = self._normalize_query(query)
-        matched: list[Transaction] = []
-        for tx in self.tx_repo.stream():
+        for tx in self.tx_repo.reverse_stream():
             if self._matches_query(tx, normalized):
-                matched.append(tx)
-        matched.sort(key=lambda item: (item.date, item.id), reverse=True)
-        for tx in matched:
-            yield tx
+                yield tx
 
     def summary(self, month: str, top: int) -> SummaryResult:
         validated_month = validate_month(month)
@@ -339,6 +334,7 @@ class BudgetService:
             writer = csv.DictWriter(
                 file,
                 fieldnames=["date", "type", "category", "amount", "memo", "tags"],
+                lineterminator="\n",
             )
             writer.writeheader()
             for tx in self.search_transactions(normalized):
